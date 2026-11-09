@@ -156,5 +156,5 @@ capability probes, guardrails, bulk planning and the demo instance. No test
 touches the network. The browser code is plain ES modules in `web/`, with no
 build step.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Coding agents: start with [AGENTS.md](AGENTS.md).
 Licensed [MIT](LICENSE).

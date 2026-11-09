@@ -16,6 +16,10 @@ the browser), pages in `web/*.html`.
 
 ## Ground rules
 
+The full list, written for coding agents and people alike, is in
+[AGENTS.md](AGENTS.md). The short version:
+
+
 - **Keep it dependency-free** unless there's no reasonable alternative. Say why
   in the PR if you add one.
 - **Logic goes in `web/lib/` as pure functions, with a test in `tests/`.** The
