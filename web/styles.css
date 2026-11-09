@@ -1525,3 +1525,29 @@ a.btn:hover { text-decoration: none; }
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+
+/* ── Settings ──────────────────────────────────────────────────────────── */
+.settings-grid { display: flex; flex-direction: column; gap: 16px; max-width: 860px; }
+.settings-panel { padding: 20px 22px; display: flex; flex-direction: column; gap: 12px; }
+.settings-title { font-size: 16px; font-weight: 650; }
+.settings-sub { font-size: 13px; color: var(--ink-3); margin-top: -6px; }
+.settings-step { font-size: 13px; font-weight: 650; margin-top: 6px; }
+.settings-field { display: flex; flex-direction: column; gap: 5px; }
+.settings-label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.settings-hint { font-size: 12px; color: var(--ink-3); }
+.settings-value { font-size: 12.5px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.settings-input { height: 36px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 8px; font: inherit; font-size: 13px; background: var(--surface); color: var(--ink); max-width: 480px; }
+.settings-actions { display: flex; gap: 8px; }
+.settings-status { font-size: 12.5px; min-height: 16px; }
+.settings-status.is-ok { color: #15803D; }
+.settings-status.is-bad { color: var(--stop-ink); }
+.settings-note { padding: 10px 14px; border-radius: 10px; background: #FEF3C7; color: #92400E; font-size: 13px; }
+.copy-block { position: relative; }
+.copy-block pre { margin: 0; padding: 12px 14px; padding-right: 84px; background: #15171C; color: #E5E7EB; border-radius: 10px; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.copy-block .copy-btn { position: absolute; top: 8px; right: 8px; height: 28px; }
+
+/* ── Builder: folder picker next to "Create draft" ─────────────────────── */
+.folder-pick-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.folder-pick { height: 32px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 8px; font: inherit; font-size: 13px; background: var(--surface); max-width: 220px; }
+.folder-pick-wrap:has(.folder-pick[hidden]) { display: none; }
+.settings-input:disabled { background: var(--bg); color: var(--ink-3); cursor: not-allowed; }

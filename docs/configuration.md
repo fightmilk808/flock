@@ -32,6 +32,16 @@ A literal key in the config file stops Flock from starting.
 | `watch.intervalMinutes` | no | Run the guardrails in the background every N minutes (2 to 1440). |
 | `watch.slack.token`, `watch.slack.channel` | no | Post new problems to a Slack channel or DM (bot token reference, channel id). |
 
+## The Settings page
+
+Admins can change two things at `/settings.html`. Both are stored in Flock's
+database, not the config file:
+
+- **Folder for new drafts:** one of your existing n8n folders (needs
+  `n8n.projectId`). It can also be chosen per draft.
+- **Shepherd's model:** overrides `shepherd.model`. The endpoint and key are
+  deliberately config-only.
+
 ## Sign-in with Cloudflare Access
 
 1. Create an Access application for Flock's hostname.

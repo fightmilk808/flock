@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test)",
+      "Bash(npm run demo)",
+      "Bash(curl -s http://127.0.0.1:4174/api/workflows)",
+      "Bash(curl -s \"http://127.0.0.1:4174/api/workflow?id=:*)",
+      "Bash(curl -s http://127.0.0.1:4174/api/shepherd)",
+      "Bash(curl -s http://127.0.0.1:4174/api/runs)",
+      "Bash(curl -s http://127.0.0.1:4174/api/agents)",
+      "Bash(curl -s http://127.0.0.1:4174/api/settings)",
+      "Bash(curl -s http://127.0.0.1:4174/api/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:4174/api/shepherd/draft :*)"
+    ],
+    "ask": [
+      "Bash(curl -s -X POST http://127.0.0.1:4174/api/shepherd/create :*)",
+      "Bash(curl -s -X POST http://127.0.0.1:4174/api/bulk/:*)",
+      "Bash(curl -s -X POST http://127.0.0.1:4174/api/settings:*)"
+    ]
+  }
+}

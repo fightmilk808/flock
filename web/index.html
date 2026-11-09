@@ -441,21 +441,35 @@ function renderDraft(draft, vet, payload, guard) {
     }));
   } else {
     const create = el("button", { class: "btn btn-primary btn-sm", type: "button", text: "Create draft in n8n" });
+    // Which existing n8n folder it lands in; the default comes from Settings.
+    const folderPick = el("select", { class: "folder-pick", "aria-label": "Folder for this draft", title: "n8n folder for this draft" }, [
+      el("option", { value: "", text: "Top level" })
+    ]);
+    folderPick.hidden = true;
+    api("/api/settings").then((st) => {
+      if (!st.foldersAvailable || !st.folders.length) return;
+      for (const f of st.folders) folderPick.append(el("option", { value: f.id, text: f.path, selected: st.draftsFolder && st.draftsFolder.id === f.id }));
+      folderPick.hidden = false;
+    }).catch(() => {});
     create.addEventListener("click", async () => {
       create.disabled = true;
       try {
+        const body = { payload };
+        if (!folderPick.hidden) body.folderId = folderPick.value || null;
         const res = await api("/api/shepherd/create", {
           method: "POST",
-          body: JSON.stringify({ payload })
+          body: JSON.stringify(body)
         });
-        say("ok", `Draft "${res.created.name}" created in n8n. It is unpublished — review and publish it there.`);
+        const where = res.folder ? ` in the "${res.folder.name}" folder` : "";
+        say("ok", `Draft "${res.created.name}" created in n8n${where}. It is unpublished — review and publish it there.`);
+        if (res.warning) say("error", res.warning);
         await loadWorkflows();
       } catch (err) {
         say("error", err.message);
         create.disabled = false;
       }
     });
-    actions.append(create);
+    actions.append(el("span", { class: "folder-pick-wrap" }, [el("span", { class: "small muted", text: "Lands in" }), folderPick]), create);
   }
 
   canvas.append(actions);

@@ -33,8 +33,13 @@ There is no install step, no build and no npm dependencies. Node 22.13+
   - `infra.js`, `bulk.js`, `identity.js`, `approvals.js`: roles, the infrastructure
     lock, Cloudflare Access sign-in, and the SQLite approvals and audit log.
   - `config.js`: config file / env loading, `org` settings, secret references.
+  - `settings.js`: what admins can change on the Settings screen (drafts folder,
+    Shepherd's model; never an endpoint or key).
   - `demo.js`: the made-up instance behind `npm run demo`.
 - `web/*.html`: one page per screen, each an inline module that only renders.
+- `web/agent/SKILL.md`: the Flock skill for coding agents, a template with
+  `{{FLOCK_URL}}`. `.claude/skills/flock/` and `.agents/skills/flock/` are
+  copies rendered with `http://127.0.0.1:4174`; a test fails if they drift.
 - `tests/*.test.mjs`: `node:test`, one file per module.
 
 ## Rules
@@ -65,4 +70,6 @@ There is no install step, no build and no npm dependencies. Node 22.13+
   narrow layout (under 900px). If the look changed, retake the matching
   `docs/media/*.png` at 1440×900, 2× scale, and keep the README images current.
 - Update `README.md`, `docs/configuration.md` and `CHANGELOG.md` when
-  behaviour, config or env vars change.
+  behaviour, config or env vars change. If an agent-facing endpoint changes,
+  update `web/agent/SKILL.md`, `docs/connect-your-agent.md`, and regenerate the
+  two skill copies.

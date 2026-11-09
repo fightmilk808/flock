@@ -175,6 +175,7 @@ export function renderSidebar(active, counts = {}) {
     ]),
     el("div", { class: "nav-group" }, [
       el("div", { class: "nav-label", text: "Elsewhere" }),
+      navItem("/settings.html", "Settings", active === "settings"),
       el("a", { class: "nav-item", href: "/n8n/home/workflows", target: "_blank", rel: "noopener" }, [
         el("span", { class: "logo-row" }, [logo({ src: "/vendor/logos/n8n.svg", label: "n8n" }, "sm"), el("span", { text: "Open n8n" })])
       ])

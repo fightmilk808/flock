@@ -47,6 +47,7 @@ outside, through n8n's public REST API.
 | --- | --- | --- |
 | **A picture of what runs where** | The editor, one workflow at a time. The Insights dashboard is Business or Enterprise; Community gets a 7-day summary banner. | A **runs map**: every system on a 3D ring, workflows as lines between them, thicker for more runs. Filter by person or system, and see a 24-hour or 7-day timeline with failures in red. |
 | **Workflows people can read** | The editor canvas. | A top-to-bottom drawing with branches labelled the way n8n labels them (IF true/false, Switch outputs, loop/done, error outputs). It has brand logos, zoom, pan and fit, and AI sub-nodes hang under their agent. |
+| **Letting AI agents near n8n** | An API key gives an agent full control: delete, publish, rewrite. | Agents use **Flock instead of the key**: they can read everything, and their drafts are checked, unpublished and filed in the folder you choose. There's a ready-made skill for Claude Code, Codex and others. |
 | **Help building workflows** | Recent versions add an AI assistant you can self-host with your own key (preview). | **Shepherd**, a chat that asks questions before it draws. Every draft is checked by fixed rules (no Code or shell nodes, no pasted keys, no localhost calls, no copies of existing workflows) and can only be created **unpublished**. Risky drafts wait for an admin's approval. |
 | **Catching mistakes** | Error workflows you wire up yourself. No scan for pasted secrets. | **Guardrails** run every 10 minutes by default, even when nobody has Flock open: keys pasted into nodes, loops (over 60 runs a minute), grouped repeat failures, writes to company data, and test status. New problems can post to Slack. |
 | **Roles: who may change what** | Sharing, projects and roles are Business or Enterprise. | An **infrastructure lock**: anything live, anything touching a company system, and anything with shell, SSH or file nodes can only be changed through Flock by an admin. Everyone else can organize the rest. |
@@ -90,6 +91,13 @@ that needs attention, with the reason for each.
 
 ![Agents: each AI agent node with its model, tools and memory](docs/media/agents.png)
 
+### Settings
+
+Pick the n8n folder new drafts land in, switch Shepherd's model and test it, and
+copy the setup for your own coding agent.
+
+![Settings: connect your agent, with copy buttons for the skill, the AGENTS.md snippet and Claude Code permissions](docs/media/settings.png)
+
 ## Connect it to your n8n
 
 1. In n8n, create an API key: **Settings → n8n API**. For the full set of
@@ -116,8 +124,33 @@ OpenRouter by default, or set `FLOCK_SHEPHERD_BASE_URL` and
 `FLOCK_SHEPHERD_MODEL`. Without that key, Shepherd stays off and the rest of
 Flock still works.
 
-For a team setup (Docker, Cloudflare Access, Slack alerts, admins, your own
-domains), see [docs/configuration.md](docs/configuration.md) and
+## Connect your agent
+
+Give your coding agent (Claude Code, Codex, Cursor, Copilot…) **Flock's
+address instead of your n8n API key**. It can read every workflow and run, and
+create drafts. The drafts pass the same checks as Shepherd's, land unpublished
+in the n8n folder you chose, and are written to the audit log. Install the
+Flock skill into your project:
+
+```bash
+mkdir -p .claude/skills/flock .agents/skills/flock
+```
+
+```bash
+curl -s http://127.0.0.1:4174/agent/SKILL.md -o .claude/skills/flock/SKILL.md
+```
+
+```bash
+cp .claude/skills/flock/SKILL.md .agents/skills/flock/SKILL.md
+```
+
+The **Settings** page has all of this with copy buttons, plus a
+`.claude/settings.json` block so Claude Code can read without asking each time.
+Full guide: [docs/connect-your-agent.md](docs/connect-your-agent.md).
+
+## Team setup
+
+For Docker, Cloudflare Access, Slack alerts, admins and your own domains, see [docs/configuration.md](docs/configuration.md) and
 [docker-compose.example.yml](docker-compose.example.yml).
 
 ## What Flock will never do
@@ -150,7 +183,7 @@ domains), see [docs/configuration.md](docs/configuration.md) and
 npm test
 ```
 
-There are 239 tests over the pure logic: config validation, the write allowlist, the
+There are 245 tests over the pure logic: config validation, the write allowlist, the
 secret scanner, the loop guard, graph layout, draft validation, approvals,
 capability probes, guardrails, bulk planning and the demo instance. No test
 touches the network. The browser code is plain ES modules in `web/`, with no

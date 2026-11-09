@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flock — settings</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Settings</h1>
+        <p>Where drafts land, which model Shepherd uses, and how to connect your own agent.</p>
+      </div>
+    </header>
+    <div class="content" id="content">
+      <div class="loading">Loading settings…</div>
+    </div>
+  </main>
+</div>
+<script type="module">
+import { api, el, clear, renderSidebar, errorBanner } from "/lib/ui.js";
+
+const shell = document.getElementById("shell");
+const content = document.getElementById("content");
+
+function mount() {
+  const bar = renderSidebar("settings");
+  const existing = shell.querySelector(".sidebar");
+  if (existing) existing.replaceWith(bar);
+  else shell.prepend(bar);
+}
+
+function panel(title, sub, children) {
+  return el("section", { class: "card settings-panel" }, [
+    el("h2", { class: "settings-title", text: title }),
+    sub ? el("p", { class: "settings-sub", text: sub }) : null,
+    ...children
+  ]);
+}
+
+function field(label, control, hint) {
+  return el("label", { class: "settings-field" }, [
+    el("span", { class: "settings-label", text: label }),
+    control,
+    hint ? el("span", { class: "settings-hint", text: hint }) : null
+  ]);
+}
+
+function readonly(label, value) {
+  return el("div", { class: "settings-field" }, [
+    el("span", { class: "settings-label", text: label }),
+    el("code", { class: "settings-value", text: value || "—" })
+  ]);
+}
+
+// A block of text with a Copy button.
+function copyBlock(text, label = "Copy") {
+  const btn = el("button", { class: "btn btn-sm copy-btn", type: "button", text: label });
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = "Copied";
+    } catch {
+      btn.textContent = "Select and copy";
+    }
+    setTimeout(() => { btn.textContent = label; }, 1600);
+  });
+  return el("div", { class: "copy-block" }, [el("pre", { text }), btn]);
+}
+
+function status(node, ok, text) {
+  node.className = `settings-status ${ok ? "is-ok" : "is-bad"}`;
+  node.textContent = text;
+}
+
+async function save(changes, statusNode) {
+  try {
+    await api("/api/settings", { method: "POST", body: JSON.stringify(changes) });
+    status(statusNode, true, "Saved");
+  } catch (err) {
+    status(statusNode, false, err.message);
+  }
+}
+
+function render(s) {
+  clear(content);
+  const lock = s.canEdit ? null : el("div", { class: "settings-note", text: `Only ${s.org.adminName} can change these settings. You can still copy the agent setup below.` });
+
+  // ── Drafts folder ────────────────────────────────────────────────
+  const folderStatus = el("span", { class: "settings-status" });
+  const folderSelect = el("select", { class: "settings-input", disabled: !s.canEdit || !s.foldersAvailable }, [
+    el("option", { value: "", text: "Top level (no folder)" }),
+    ...s.folders.map((f) => el("option", { value: f.id, text: f.path, selected: s.draftsFolder && s.draftsFolder.id === f.id }))
+  ]);
+  folderSelect.addEventListener("change", () => save({ draftsFolderId: folderSelect.value || null }, folderStatus));
+  const drafts = panel("New drafts", "Every draft Shepherd or an agent creates lands unpublished, in one of your existing n8n folders.", [
+    field("Folder for new drafts", folderSelect,
+      s.foldersAvailable
+        ? "You can still pick a different folder for a single draft in the Builder."
+        : "Folders need n8n.projectId in the config (FLOCK_N8N_PROJECT_ID)."),
+    folderStatus
+  ]);
+
+  // ── Shepherd's model ─────────────────────────────────────────────
+  const sh = s.shepherd;
+  const modelStatus = el("span", { class: "settings-status" });
+  const modelInput = el("input", { class: "settings-input", type: "text", value: sh.model, spellcheck: "false", disabled: !s.canEdit || sh.demo || !sh.enabled });
+  const saveModel = el("button", { class: "btn btn-sm", type: "button", text: "Save model", disabled: !s.canEdit || sh.demo || !sh.enabled });
+  saveModel.addEventListener("click", () => save({ shepherdModel: modelInput.value.trim() === sh.configModel ? null : modelInput.value.trim() }, modelStatus));
+  const test = el("button", { class: "btn btn-sm", type: "button", text: "Test connection", disabled: !s.canEdit || !sh.enabled });
+  test.addEventListener("click", async () => {
+    test.disabled = true;
+    status(modelStatus, true, "Asking the model…");
+    try {
+      const r = await api("/api/settings/test-shepherd", { method: "POST", body: "{}" });
+      status(modelStatus, r.ok, r.ok ? `Connected in ${r.ms} ms: “${r.reply}”` : `Failed: ${r.error}`);
+    } catch (err) {
+      status(modelStatus, false, err.message);
+    } finally {
+      test.disabled = false;
+    }
+  });
+  const shepherd = panel("Shepherd's model", sh.enabled
+    ? "The endpoint and key come from the config file or environment, so this page can never send the key somewhere new."
+    : "Shepherd is off: set FLOCK_SHEPHERD_API_KEY (or shepherd.apiKey in the config) and restart Flock.", [
+    readonly("Endpoint", sh.endpoint),
+    readonly("Key", sh.keyRef ? `${sh.keyRef} (reference only; the value is never shown)` : sh.demo ? "none needed in demo mode" : "not set"),
+    field("Model", modelInput, sh.modelOverridden ? `Changed here. The config says ${sh.configModel}.` : "Any model id your endpoint serves that supports structured output."),
+    el("div", { class: "settings-actions" }, [saveModel, test]),
+    modelStatus
+  ]);
+
+  // ── Connect your agent ───────────────────────────────────────────
+  const origin = location.origin;
+  const skillUrl = `${origin}/agent/SKILL.md`;
+  const install = [
+    `mkdir -p .claude/skills/flock .agents/skills/flock`,
+    `curl -s ${skillUrl} -o .claude/skills/flock/SKILL.md`,
+    `cp .claude/skills/flock/SKILL.md .agents/skills/flock/SKILL.md`
+  ].join("\n");
+  const snippet = [
+    "## n8n (through Flock)",
+    "",
+    `Our n8n is reached through Flock at ${origin}. Never call n8n directly or ask for an n8n API key.`,
+    `Instructions: ${skillUrl}`
+  ].join("\n");
+  const agent = panel("Connect your agent", "Give your coding agent (Claude Code, Codex, Cursor, Copilot…) Flock's address instead of your n8n API key. It can read everything and create drafts, which pass the same checks as Shepherd's and are always unpublished.", [
+    el("h3", { class: "settings-step", text: "1. Install the Flock skill in your project" }),
+    el("p", { class: "settings-hint", text: "Claude Code reads .claude/skills; Codex and others read .agents/skills. The skill already has this Flock's address in it." }),
+    copyBlock(install),
+    el("h3", { class: "settings-step", text: "2. Or paste this into AGENTS.md or CLAUDE.md" }),
+    copyBlock(snippet),
+    el("h3", { class: "settings-step", text: "3. Let it call Flock without a prompt each time (Claude Code)" }),
+    el("p", { class: "settings-hint", text: "Add to .claude/settings.json. Reads and drafting run freely; creating a draft and any bulk change still ask you." }),
+    copyBlock(JSON.stringify({
+      permissions: {
+        allow: [
+          `Bash(curl -s ${origin}/api/workflows)`,
+          `Bash(curl -s "${origin}/api/workflow?id=:*)`,
+          `Bash(curl -s ${origin}/api/shepherd)`,
+          `Bash(curl -s ${origin}/api/runs)`,
+          `Bash(curl -s ${origin}/api/agents)`,
+          `Bash(curl -s ${origin}/api/settings)`,
+          `Bash(curl -s -X POST ${origin}/api/shepherd/draft :*)`
+        ],
+        ask: [
+          `Bash(curl -s -X POST ${origin}/api/shepherd/create :*)`,
+          `Bash(curl -s -X POST ${origin}/api/bulk/:*)`
+        ]
+      }
+    }, null, 2)),
+    el("p", { class: "settings-hint" }, [
+      el("span", { text: s.auth === "access"
+        ? "This Flock is behind Cloudflare Access, which an unattended agent can't sign in to yet. Run a local Flock for agents. "
+        : "Your agent acts as the local admin here; set FLOCK_ACTOR to label its audit-log entries. " }),
+      el("a", { href: "https://github.com/fightmilk808/flock/blob/main/docs/connect-your-agent.md", target: "_blank", rel: "noopener", text: "Full guide" })
+    ])
+  ]);
+
+  content.append(el("div", { class: "settings-grid" }, [lock, drafts, shepherd, agent]));
+}
+
+async function load() {
+  mount();
+  try {
+    render(await api("/api/settings"));
+  } catch (err) {
+    clear(content);
+    content.append(errorBanner(err.message));
+  }
+}
+
+load();
+</script>
+</body>
+</html>

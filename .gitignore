@@ -4,4 +4,6 @@ data/
 flock.config.json
 .env
 .DS_Store
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/skills/

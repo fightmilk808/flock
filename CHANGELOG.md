@@ -17,3 +17,10 @@ First public release.
 - **Demo mode** (`npm run demo`): a made-up instance, so you can try it with no
   n8n and no keys.
 - Config from a file or from environment variables; Cloudflare Access sign-in.
+- **Settings** page: the n8n folder new drafts land in (also picked per draft
+  in the Builder), Shepherd's model with a connection test, and copy-paste setup
+  for coding agents.
+- **Connect your agent**: a Flock skill for Claude Code (`.claude/skills`) and
+  other agents (`.agents/skills`), served at `/agent/SKILL.md` with the
+  instance's address filled in, plus a `.claude/settings.json` that pre-allows
+  reads only.

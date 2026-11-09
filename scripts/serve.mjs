@@ -33,6 +33,7 @@ import { systemsFromTags } from "../web/lib/logos.js";
 import { guardDraft } from "../web/lib/draft-guard.js";
 import { createIdentity, AuthError } from "../web/lib/identity.js";
 import { runWatch, createSlackSender } from "../web/lib/watch.js";
+import { validateSettings, readSettings, writeSettings, resolveDraftFolder, folderPaths, renderSkill, SettingsError } from "../web/lib/settings.js";
 
 const webRoot = resolve(fileURLToPath(new URL("../web/", import.meta.url)));
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -93,13 +94,25 @@ async function boot() {
   if (DEMO) {
     llm = createDemoLlm();
   } else if (config.shepherd && config.shepherd.apiKey) {
-    llm = createLlmClient({
+    shepherdBase = {
       baseUrl: config.shepherd.baseUrl || "https://openrouter.ai/api/v1",
       apiKey: await resolveSecret(config.shepherd.apiKey),
-      model: config.shepherd.model || "anthropic/claude-sonnet-4.5",
-      org
-    });
+      model: config.shepherd.model || "anthropic/claude-sonnet-4.5"
+    };
+    llm = buildLlm(readSettings(store).shepherdModel);
   }
+}
+
+// Shepherd's endpoint and key come only from config; the Settings screen can
+// change the model name and nothing else.
+let shepherdBase = null;
+function buildLlm(model) {
+  return createLlmClient({ ...shepherdBase, model: model || shepherdBase.model, org });
+}
+
+async function listFolders() {
+  if (!config.n8n.projectId) return [];
+  return n8n.listFolders(config.n8n.projectId).catch(() => []);
 }
 
 function json(res, status, body) {
@@ -138,7 +151,7 @@ async function snapshot() {
     n8n.listExecutions({ limit: 250 }).then((r) => (r && r.data) || []),
     n8n.listUsers().catch(() => []),
     n8n.listTags().catch(() => []),
-    n8n.listFolders(config.n8n.projectId).catch(() => [])
+    listFolders()
   ]);
   const findings = scanWorkflows(workflows);
   const infra = classifyAll(workflows, { internalHosts: org.internalHosts, companySystems: org.companySystems });
@@ -173,6 +186,56 @@ function systemsWithLogos(wf) {
 }
 
 const routes = {
+  // What the Settings screen shows. Secrets appear only as their reference.
+  "GET /api/settings": async (url, body, who) => {
+    const saved = readSettings(store);
+    const folders = folderPaths(await listFolders());
+    const folder = folders.find((f) => f.id === saved.draftsFolderId) || null;
+    const s = config.shepherd || {};
+    return {
+      canEdit: who.isAdmin,
+      demo: DEMO,
+      org: { name: org.name, adminName: org.adminName },
+      folders,
+      foldersAvailable: Boolean(config.n8n.projectId),
+      draftsFolder: folder,
+      shepherd: {
+        enabled: Boolean(llm),
+        demo: DEMO,
+        endpoint: DEMO ? "scripted (demo mode)" : (s.baseUrl || "https://openrouter.ai/api/v1"),
+        keyRef: DEMO ? null : (s.apiKey || null),
+        model: DEMO ? "scripted" : (saved.shepherdModel || s.model || "anthropic/claude-sonnet-4.5"),
+        configModel: s.model || "anthropic/claude-sonnet-4.5",
+        modelOverridden: Boolean(saved.shepherdModel)
+      },
+      n8nUiUrl: org.n8nUiUrl,
+      auth: identity.mode
+    };
+  },
+
+  "POST /api/settings": async (url, body, who) => {
+    if (!who.isAdmin) return { error: `only ${org.adminName} can change settings`, status: 403 };
+    const changes = validateSettings(body, { folders: await listFolders() });
+    writeSettings(store, changes);
+    if ("shepherdModel" in changes && shepherdBase) llm = buildLlm(changes.shepherdModel);
+    store.record(who.email, "settings.changed", Object.keys(changes).join(","), JSON.stringify(changes).slice(0, 300), new Date().toISOString());
+    return { ok: true, settings: readSettings(store) };
+  },
+
+  // One small round trip to the model, so a wrong model or key shows here
+  // rather than in the middle of someone's chat.
+  "POST /api/settings/test-shepherd": async (url, body, who) => {
+    if (!who.isAdmin) return { error: `only ${org.adminName} can test Shepherd`, status: 403 };
+    if (!llm) return { ok: false, error: "Shepherd has no API key configured" };
+    const started = Date.now();
+    try {
+      const r = await llm.draftWorkflow("Reply with a one-line hello. Do not draw anything.", { context: { workflows: [] } });
+      return { ok: true, ms: Date.now() - started, reply: String(r.reply || "").slice(0, 200) };
+    } catch (err) {
+      return { ok: false, ms: Date.now() - started, error: String(err.message || err).slice(0, 300) };
+    }
+  },
+
   "GET /api/health": async (url, body, who) => ({
     ok: true,
     n8n: config.n8n.baseUrl,
@@ -572,9 +635,25 @@ const routes = {
         status: 409
       };
     }
+    // Which existing n8n folder it lands in: the one asked for, else the
+    // default from Settings, else the top level. Checked before creating.
+    const folder = resolveDraftFolder({ requested: body.folderId, settings: readSettings(store), folders: await listFolders() });
     const created = await n8n.createWorkflow(payload);
     store.record(who.email, "workflow.draft-created", created.id, created.name, new Date().toISOString());
-    return { created: { id: created.id, name: created.name, active: created.active } };
+    let moveError = null;
+    if (folder) {
+      // The same write as a bulk "move to folder"; n8n files it on update.
+      try {
+        await n8n.updateWorkflow(created.id, { name: created.name, nodes: created.nodes, connections: created.connections, settings: created.settings, parentFolderId: folder.id });
+      } catch (err) {
+        moveError = String(err.message || err).slice(0, 200);
+      }
+    }
+    return {
+      created: { id: created.id, name: created.name, active: created.active },
+      folder: folder && !moveError ? folder : null,
+      ...(moveError ? { warning: `Created at the top level: moving it into "${folder.name}" failed (${moveError}).` } : {})
+    };
   }
 };
 
@@ -612,6 +691,15 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // The Flock skill for coding agents, with this instance's address filled in.
+  if (url.pathname === "/agent/SKILL.md") {
+    const template = await readFile(join(webRoot, "agent", "SKILL.md"), "utf8");
+    const origin = `http://${req.headers.host || `${HOST}:${PORT}`}`;
+    const body = renderSkill(template, org.publicUrl || origin);
+    res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": "inline; filename=SKILL.md" }).end(body);
+    return;
+  }
+
   if (!url.pathname.startsWith("/api/")) {
     await serveStatic(url.pathname, res);
     return;
@@ -643,6 +731,7 @@ const server = createServer(async (req, res) => {
     if (err instanceof DraftError) return json(res, 422, { error: err.message });
     if (err instanceof LlmError) return json(res, 502, { error: err.message });
     if (err instanceof BulkError) return json(res, 422, { error: err.message });
+    if (err instanceof SettingsError) return json(res, 422, { error: err.message });
     if (err instanceof SyntaxError) return json(res, 400, { error: "request body is not valid JSON" });
     console.error("[flock]", err);
     json(res, 500, { error: "internal error" });

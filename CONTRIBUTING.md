@@ -7,7 +7,7 @@ easiest to review.
 
 ```bash
 npm run demo   # sample data, no n8n needed: http://127.0.0.1:4174
-npm test       # 239 tests, no network
+npm test       # 245 tests, no network
 ```
 
 There is no build step and there are no npm dependencies. Server code is in
