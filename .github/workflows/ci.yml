@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - name: Demo mode boots and answers
+        run: |
+          FLOCK_DEMO=1 FLOCK_PORT=4180 node scripts/serve.mjs &
+          for i in $(seq 1 20); do curl -fs http://127.0.0.1:4180/api/health && break; sleep 1; done
+          curl -fs http://127.0.0.1:4180/api/workflows > /dev/null
+          curl -fs http://127.0.0.1:4180/api/shepherd > /dev/null

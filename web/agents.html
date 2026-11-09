@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flock — agents</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Agents</h1>
+        <p>Every AI agent built on this instance, what it can reach, and whether it is on.</p>
+      </div>
+      <button class="btn" type="button" id="refresh">Refresh</button>
+    </header>
+    <div class="content" id="content">
+      <div class="loading">Reading agents…</div>
+    </div>
+  </main>
+</div>
+<script type="module">
+import { api, el, clear, renderSidebar, errorBanner, relativeTime, logo } from "/lib/ui.js";
+import { logoForProvider } from "/lib/logos.js";
+
+const shell = document.getElementById("shell");
+const content = document.getElementById("content");
+let sidebarCounts = {};
+
+function mount() {
+  const existing = shell.querySelector(".sidebar");
+  if (existing) existing.replaceWith(renderSidebar("agents", sidebarCounts));
+  else shell.prepend(renderSidebar("agents", sidebarCounts));
+}
+
+async function load() {
+  content.replaceChildren(el("div", { class: "loading", text: "Reading agents…" }));
+  try {
+    const data = await api("/api/agents");
+    sidebarCounts = data.counts || { agents: data.summary.agentCount };
+    mount();
+    render(data);
+  } catch (err) {
+    mount();
+    clear(content);
+    content.append(errorBanner(err.message));
+  }
+}
+
+function render(data) {
+  clear(content);
+  const s = data.summary;
+
+  content.append(el("div", { class: "stats" }, [
+    stat("Agents", s.agentCount),
+    stat("On", s.active),
+    stat("With tools", s.withTools),
+    stat("With memory", s.withMemory),
+    stat("Using MCP", s.usingMcp),
+    el("div", { class: "card stat" }, [
+      el("div", { class: "stat-label", text: "Models" }),
+      el("div", { class: "logo-row", style: { marginTop: "4px" } },
+        s.providers.length
+          ? s.providers.map((p) => logo({ src: logoForProvider(p), label: p }))
+          : [el("span", { class: "stat-note", text: "none attached" })])
+    ])
+  ]));
+
+  const section = el("div", { class: "section" }, [el("h2", { class: "section-title", text: `Agents · ${data.agents.length}` })]);
+  if (data.agents.length === 0) {
+    section.append(el("div", { class: "card empty", text: "No agent nodes on this instance." }));
+  } else {
+    section.append(el("div", { class: "card rows" }, data.agents.map(agentRow)));
+  }
+  content.append(section);
+
+  if (data.aiWithoutAgent.length) {
+    content.append(el("div", { class: "section" }, [
+      el("h2", { class: "section-title", text: "Tagged AI, but no agent node" }),
+      el("div", { class: "card rows" }, data.aiWithoutAgent.map((w) =>
+        el("a", { class: "row", href: `/?id=${encodeURIComponent(w.id)}` }, [
+          el("span", { class: `wf-dot${w.active ? " on" : ""}` }),
+          el("div", { class: "row-title", text: w.name }),
+          el("span", { class: w.active ? "chip chip-ok" : "chip chip-muted", text: w.active ? "on" : "off" })
+        ])
+      ))
+    ]));
+  }
+
+  content.append(el("p", { class: "small muted", style: { maxWidth: "760px" }, text:
+    "n8n's Agents module has no public API, so Flock reads agents as they are built here: " +
+    "LangChain agent nodes inside workflows. An agent that exists only in the Agents module would not appear." }));
+}
+
+function agentRow(a) {
+  const chips = [];
+  chips.push(el("span", { class: a.active ? "chip chip-ok" : "chip chip-muted", text: a.active ? "on" : "off" }));
+  if (a.hasChatTrigger) chips.push(el("span", { class: "chip chip-muted", text: "chat" }));
+  if (a.memory) chips.push(el("span", { class: "chip chip-muted", text: "memory" }));
+  if (a.usesMcp) chips.push(el("span", { class: "chip chip-warn", text: "MCP" }));
+  if (a.findings) chips.push(el("span", { class: "chip chip-stop", text: `${a.findings} secret` }));
+
+  const models = a.providers.length
+    ? a.providers.map((p) => logo({ src: logoForProvider(p), label: p }))
+    : [logo({ label: "No model", initials: "–", color: "#C9CDD6" })];
+
+  return el("a", { class: "row agent-row", href: `/?id=${encodeURIComponent(a.workflowId)}` }, [
+    el("span", { class: "logo-row" }, models),
+    el("div", { style: { minWidth: "0" } }, [
+      el("div", { class: "row-title", text: a.workflowName }),
+      el("div", { class: "row-sub", text:
+        `${a.name} · ${a.providers.join(", ") || "no model"} · ${a.runs} run${a.runs === 1 ? "" : "s"}` +
+        (a.failures ? ` · ${a.failures} failed` : "") + ` · updated ${relativeTime(a.updatedAt)}` })
+    ]),
+    el("div", { class: "agent-tools", title: a.tools.join(", "), text: a.tools.length ? `🔧 ${a.tools.join(", ")}` : "no tools" }),
+    el("div", { class: "row-end" }, chips)
+  ]);
+}
+
+function stat(label, value) {
+  return el("div", { class: "card stat" }, [
+    el("div", { class: "stat-label", text: label }),
+    el("div", { class: "stat-value", text: String(value) })
+  ]);
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

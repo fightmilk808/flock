@@ -1,0 +1,7 @@
+node_modules/
+data/
+*.log
+flock.config.json
+.env
+.DS_Store
+.claude/

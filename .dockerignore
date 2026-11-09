@@ -1,0 +1,9 @@
+.git
+node_modules
+data
+docs
+tests
+flock.config.json
+*.log
+.env
+.DS_Store

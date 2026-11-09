@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flock — runs map</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <main class="main map-main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Runs map</h1>
+        <p>Every system the company is wired to, and what flows between them.</p>
+      </div>
+      <div class="segmented" id="range" role="group" aria-label="Time range">
+        <button type="button" data-range="hour" aria-pressed="false">Last hour</button>
+        <button type="button" data-range="day" aria-pressed="true">24 hours</button>
+        <button type="button" data-range="week" aria-pressed="false">7 days</button>
+      </div>
+      <button class="btn btn-sm" type="button" id="reset-view">Reset view</button>
+    </header>
+
+    <div class="map-stage">
+      <canvas id="scene" aria-label="3D map of connected systems"></canvas>
+
+      <div class="map-overlay map-filters" id="filters">
+        <div class="map-panel-title">Who built it</div>
+        <div id="filter-people"></div>
+        <div class="map-panel-title" style="margin-top:12px">Systems</div>
+        <div id="filter-systems"></div>
+        <button class="btn btn-sm" type="button" id="clear-filters" style="margin-top:10px; width:100%">Clear filters</button>
+      </div>
+
+      <div class="map-overlay map-legend" id="legend"></div>
+
+      <div class="map-overlay map-tip" id="tip" hidden></div>
+
+      <aside class="map-overlay arc-panel" id="arc-panel" hidden aria-label="Workflows on this connection"></aside>
+
+      <div class="map-empty" id="map-empty" hidden>
+        <div>Nothing matches those filters.</div>
+      </div>
+    </div>
+
+    <div class="timeline" id="timeline">
+      <div class="timeline-head">
+        <div class="timeline-label" id="timeline-label">Runs over time</div>
+        <div class="small muted" id="timeline-note"></div>
+      </div>
+      <canvas id="timeline-canvas" height="64"></canvas>
+    </div>
+  </main>
+</div>
+<script type="module">
+import { api, el, clear, renderSidebar, errorBanner, initials, logo } from "/lib/ui.js";
+import { createMap } from "/lib/map3d.js";
+
+const shell = document.getElementById("shell");
+const canvas = document.getElementById("scene");
+const legendEl = document.getElementById("legend");
+const tipEl = document.getElementById("tip");
+const emptyEl = document.getElementById("map-empty");
+const peopleEl = document.getElementById("filter-people");
+const systemsEl = document.getElementById("filter-systems");
+const timelineCanvas = document.getElementById("timeline-canvas");
+const timelineNote = document.getElementById("timeline-note");
+const timelineLabel = document.getElementById("timeline-label");
+const rangeBar = document.getElementById("range");
+
+let range = "day";
+let map = null;
+let full = null;
+let sidebarCounts = {};
+const filters = { people: new Set(), systems: new Set() };
+const selectedPeople = () => filters.people;
+let scrub = null;
+
+function mount() {
+  const existing = shell.querySelector(".sidebar");
+  if (existing) existing.replaceWith(renderSidebar("runs", sidebarCounts));
+  else shell.prepend(renderSidebar("runs", sidebarCounts));
+}
+
+async function load() {
+  try {
+    const data = await api(`/api/runs?range=${range}`);
+    full = data;
+    sidebarCounts = { company: data.totals.workflows };
+    mount();
+    buildFilters(data);
+    applyFilters();
+    drawTimeline(data.timeline);
+  } catch (err) {
+    mount();
+    document.querySelector(".map-stage").replaceChildren(errorBanner(err.message));
+  }
+}
+
+// Filters are derived from the data, not hardcoded: a new person or system
+// shows up in the panel the first time it appears.
+function buildFilters(data) {
+  clear(peopleEl);
+  for (const b of data.builders) {
+    peopleEl.append(
+      filterRow({
+        label: `${b.name} · ${b.count}`,
+        color: b.color,
+        initials: b.initials,
+        checked: filters.people.has(b.name),
+        onChange: (on) => {
+          on ? filters.people.add(b.name) : filters.people.delete(b.name);
+          applyFilters();
+        }
+      })
+    );
+  }
+
+  clear(systemsEl);
+  for (const n of data.nodes) {
+    systemsEl.append(
+      filterRow({
+        label: n.label,
+        color: n.color,
+        initials: n.initials,
+        logoPath: n.logoPath,
+        checked: filters.systems.has(n.label),
+        onChange: (on) => {
+          on ? filters.systems.add(n.label) : filters.systems.delete(n.label);
+          applyFilters();
+        }
+      })
+    );
+  }
+}
+
+function filterRow({ label, color, initials: ini, logoPath, checked, onChange }) {
+  const box = el("input", { type: "checkbox", checked });
+  box.addEventListener("change", () => onChange(box.checked));
+  const dot = logoPath
+    ? el("img", { src: logoPath, alt: "", style: { width: "16px", height: "16px", objectFit: "contain" } })
+    : el("span", {
+        style: {
+          width: "16px", height: "16px", borderRadius: "50%", background: color,
+          color: "#fff", fontSize: "9px", fontWeight: "700",
+          display: "inline-flex", alignItems: "center", justifyContent: "center"
+        },
+        text: ini
+      });
+  return el("label", { class: "filter-row" }, [box, dot, el("span", { text: label })]);
+}
+
+// The filter is applied to the view model, so the 3D scene is rebuilt from a
+// smaller graph rather than having hidden objects left in it.
+function applyFilters() {
+  const anyPeople = filters.people.size > 0;
+  const anySystems = filters.systems.size > 0;
+
+  const edges = full.edges.filter((e) => {
+    if (anyPeople && !filters.people.has(e.owner)) return false;
+    if (anySystems && !e.systems.some((s) => filters.systems.has(s))) return false;
+    return true;
+  });
+
+  const visibleSystems = new Set(edges.flatMap((e) => e.systems));
+  const nodes = full.nodes.filter((n) => (anySystems ? filters.systems.has(n.label) : visibleSystems.has(n.label)));
+
+  const data = { ...full, nodes, edges };
+  // Only "nothing matches" when the person has actually filtered something
+  // away — an unfiltered map with no runs is a different statement.
+  const filtering = anyPeople || anySystems;
+  const empty = !filtering && edges.length === 0;
+
+  emptyEl.hidden = !empty;
+  canvas.style.opacity = empty ? "0.25" : "1";
+
+  if (!map) map = createMap(canvas, { onSelect: onSceneSelect });
+  map.setData(data);
+
+  drawLegend(edges, data.builders);
+}
+
+function drawLegend(edges, builders) {
+  clear(legendEl);
+  const owners = [...new Set(edges.map((e) => e.owner))];
+  legendEl.append(el("div", { class: "map-panel-title", text: "Colour = who built it" }));
+  for (const name of owners) {
+    const b = builders.find((x) => x.name === name);
+    legendEl.append(
+      el("div", { class: "legend-row" }, [
+        el("span", { class: "legend-swatch", style: { background: b ? b.color : "#5b7cfa" } }),
+        el("span", { text: name })
+      ])
+    );
+  }
+  legendEl.append(
+    el("div", { class: "legend-hint", text: "Each line is the workflows linking two systems; thicker = more runs. Hover a line for its workflows, click to list them all." })
+  );
+}
+
+const arcPanel = document.getElementById("arc-panel");
+
+function rangeText() {
+  return { hour: "in the last hour", day: "in 24 h", week: "in 7 days" }[range] || "";
+}
+
+function logoOf(label) {
+  const n = (full && full.nodes || []).find((x) => x.label === label);
+  return logo({ src: n && n.logoPath, label, initials: n && n.initials, color: n && n.color }, "sm");
+}
+
+function pairHead(pair) {
+  return el("div", { class: "arc-head" }, [
+    logoOf(pair.a), el("span", { class: "arc-sep", text: "↔" }), logoOf(pair.b),
+    el("span", { class: "arc-title", text: `${pair.a} ↔ ${pair.b}` })
+  ]);
+}
+
+function pairSummary(pair) {
+  const n = pair.workflows.length;
+  return `${n} workflow${n === 1 ? "" : "s"} · ${pair.active} on · ${pair.runs.toLocaleString()} run${pair.runs === 1 ? "" : "s"} ${rangeText()}` +
+    (pair.failures ? ` · ${pair.failures} failed` : "");
+}
+
+function placeTip(x, y) {
+  const stage = canvas.getBoundingClientRect();
+  const w = tipEl.offsetWidth || 280, h = tipEl.offsetHeight || 120;
+  let left = x - stage.left + 16, top = y - stage.top + 16;
+  if (left + w > stage.width - 8) left = x - stage.left - w - 16;
+  if (top + h > stage.height - 8) top = stage.height - h - 8;
+  tipEl.style.left = `${Math.max(8, left)}px`;
+  tipEl.style.top = `${Math.max(8, top)}px`;
+  tipEl.style.right = "auto";
+}
+
+function showArcPanel(pair) {
+  clear(arcPanel);
+  arcPanel.hidden = false;
+  arcPanel.append(
+    el("div", { class: "arc-panel-top" }, [
+      pairHead(pair),
+      el("button", { class: "arc-close", type: "button", "aria-label": "Close", text: "×", onclick: closeArcPanel })
+    ]),
+    el("div", { class: "small", style: { color: "#9aa3b5", margin: "2px 0 10px" }, text: pairSummary(pair) }),
+    el("div", { class: "arc-list" }, pair.workflows.map((w) =>
+      el("a", { class: "arc-row", href: `/?id=${encodeURIComponent(w.workflowId)}`, title: "Open in Builder" }, [
+        el("span", { class: `wf-dot${w.active ? " on" : ""}`, title: w.active ? "On" : "Off" }),
+        el("span", { class: "arc-name", text: w.name }),
+        el("span", { class: "arc-runs", text: w.runs ? w.runs.toLocaleString() : "–" }),
+        w.failures ? el("span", { class: "chip chip-stop", text: `${w.failures} failed` }) : null,
+        w.writesCompanyData ? el("span", { class: "chip chip-warn", title: "Writes to the company database", text: "DB write" }) : null
+      ])
+    ))
+  );
+}
+
+function closeArcPanel() {
+  arcPanel.hidden = true;
+  if (map) map.setSelected(null);
+}
+
+function onSceneSelect(event) {
+  if (event.kind === "move") {
+    if (!tipEl.hidden) placeTip(event.clientX, event.clientY);
+    return;
+  }
+  if (event.kind === "hover") {
+    if (event.edge) {
+      const pair = event.edge;
+      clear(tipEl);
+      tipEl.hidden = false;
+      tipEl.append(
+        pairHead(pair),
+        el("div", { class: "small", style: { color: "#9aa3b5", margin: "4px 0 6px" }, text: pairSummary(pair) }),
+        ...pair.workflows.slice(0, 5).map((w) =>
+          el("div", { class: "tip-row" }, [
+            el("span", { class: `wf-dot${w.active ? " on" : ""}` }),
+            el("span", { class: "arc-name", text: w.name }),
+            el("span", { class: "arc-runs", text: w.runs ? w.runs.toLocaleString() : "–" })
+          ])),
+        pair.workflows.length > 5 ? el("div", { class: "small", style: { color: "#9aa3b5", marginTop: "4px" }, text: `+${pair.workflows.length - 5} more · click the line to list them all` }) : el("div", { class: "small", style: { color: "#9aa3b5", marginTop: "4px" }, text: "Click the line to pin this list" })
+      );
+      placeTip(event.clientX, event.clientY);
+      return;
+    }
+    const node = event.node;
+    if (!node) {
+      tipEl.hidden = true;
+      return;
+    }
+    tipEl.hidden = false;
+    clear(tipEl);
+    tipEl.style.left = "auto"; tipEl.style.top = "16px"; tipEl.style.right = "16px";
+    tipEl.append(
+      el("div", { class: "arc-head" }, [logoOf(node.label), el("span", { class: "arc-title", text: node.label })]),
+      el("div", { class: "small", style: { color: "#9aa3b5" }, text: `${node.workflowCount} workflows · ${node.runs} runs ${rangeText()}` }),
+      node.note ? el("div", { class: "small", style: { color: "#fbbf24" }, text: node.note }) : null,
+      el("div", { class: "small", style: { color: "#9aa3b5", marginTop: "4px" }, text: "Click to show only this system" })
+    );
+    return;
+  }
+  if (event.kind === "select") {
+    if (event.edge) {
+      tipEl.hidden = true;
+      showArcPanel(event.edge);
+      return;
+    }
+    if (event.node && event.node.kind === "node") {
+      const label = event.node.label;
+      const owner = [...selectedPeople()].join(", ");
+      location.href = `/runs.html?focus=${encodeURIComponent(label)}${owner ? `&owner=${encodeURIComponent(owner)}` : ""}`;
+      return;
+    }
+    closeArcPanel();
+  }
+}
+
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeArcPanel(); });
+
+// ── Timeline ────────────────────────────────────────────────────────────
+function drawTimeline(timeline) {
+  if (!timeline) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = timelineCanvas.getBoundingClientRect();
+  timelineCanvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  timelineCanvas.height = Math.floor(64 * dpr);
+  const ctx = timelineCanvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const w = rect.width;
+  const h = 64;
+
+  const max = Math.max(1, ...timeline.buckets.map((b) => b.total));
+  const bw = w / timeline.buckets.length;
+  const plotH = h - 10;
+
+  ctx.clearRect(0, 0, w, h);
+  timeline.buckets.forEach((b, i) => {
+    const totalH = (b.total / max) * plotH;
+    const failH = (b.failed / max) * plotH;
+    const x = i * bw;
+    ctx.fillStyle = "rgba(91,124,250,0.55)";
+    ctx.fillRect(x + 1, h - totalH, Math.max(1, bw - 2), totalH);
+    if (failH > 0) {
+      ctx.fillStyle = "rgba(220,80,80,0.85)";
+      ctx.fillRect(x + 1, h - failH, Math.max(1, bw - 2), failH);
+    }
+  });
+
+  if (scrub !== null) {
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.fillRect(scrub * bw, 0, bw, h);
+  }
+
+  const bucket = scrub !== null ? timeline.buckets[scrub] : null;
+  timelineLabel.textContent = bucket
+    ? `${new Date(bucket.from).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${bucket.total} runs${bucket.failed ? ` · ${bucket.failed} failed` : ""}`
+    : "Runs over time";
+
+  timelineNote.textContent = timeline.truncated
+    ? `Sampled from the newest ${timeline.sampleSize} executions`
+    : `${timeline.inWindow} runs in the window`;
+
+  timelineCanvas.onmousemove = (e) => {
+    const r = timelineCanvas.getBoundingClientRect();
+    const i = Math.min(timeline.buckets.length - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * timeline.buckets.length)));
+    scrub = i;
+    drawTimeline(timeline);
+  };
+  timelineCanvas.onmouseleave = () => {
+    scrub = null;
+    drawTimeline(timeline);
+  };
+  timelineCanvas.onclick = () => {
+    if (scrub === null) return;
+    range = timeline.range;
+    applyFilters();
+  };
+}
+
+rangeBar.addEventListener("click", (event) => {
+  const btn = event.target.closest("button[data-range]");
+  if (!btn) return;
+  range = btn.dataset.range;
+  for (const b of rangeBar.querySelectorAll("button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.range === range));
+  }
+  load();
+});
+
+document.getElementById("clear-filters").addEventListener("click", () => {
+  filters.people.clear();
+  filters.systems.clear();
+  buildFilters(full);
+  applyFilters();
+});
+
+document.getElementById("reset-view").addEventListener("click", () => {
+  if (map) map.resetView();
+});
+
+window.addEventListener("resize", () => {
+  if (full && full.timeline) drawTimeline(full.timeline);
+});
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy to flock.config.json. Secrets are references only: env:NAME (an environment variable) or op://<vault-uuid>/<item-uuid>/<field> (1Password CLI). See docs/configuration.md.",
+  "n8n": {
+    "baseUrl": "https://n8n.example.com",
+    "apiKey": "env:FLOCK_N8N_API_KEY",
+    "projectId": "your-n8n-project-id"
+  },
+  "shepherd": {
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "model": "anthropic/claude-sonnet-4.5",
+    "apiKey": "env:FLOCK_SHEPHERD_API_KEY"
+  },
+  "org": {
+    "name": "Example Co",
+    "adminName": "Maya",
+    "n8nUiUrl": "https://n8n.example.com",
+    "publicUrl": "https://flock.example.com",
+    "internalHosts": ["example.com"]
+  },
+  "watch": {
+    "intervalMinutes": 10
+  }
+}

@@ -1,0 +1,11 @@
+name: Feature idea
+description: Something Flock should do for self-hosted n8n
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem first, then any idea for how Flock could help.
+    validations:
+      required: true

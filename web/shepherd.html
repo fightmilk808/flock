@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flock — Shepherd</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Shepherd</h1>
+        <p>Builds workflows with people, checks every one, and keeps the flock tidy.</p>
+      </div>
+      <button class="btn" type="button" id="refresh">Refresh</button>
+    </header>
+    <div class="content" id="content">
+      <div class="loading">Checking the flock…</div>
+    </div>
+  </main>
+</div>
+<script type="module">
+import { api, el, clear, renderSidebar, errorBanner, relativeTime, initials, viewer, orgInfo } from "/lib/ui.js";
+const ORG = await orgInfo();
+
+const shell = document.getElementById("shell");
+const content = document.getElementById("content");
+let sidebarCounts = {};
+
+function mount() {
+  const existing = shell.querySelector(".sidebar");
+  if (existing) existing.replaceWith(renderSidebar("shepherd", sidebarCounts));
+  else shell.prepend(renderSidebar("shepherd", sidebarCounts));
+}
+
+async function load() {
+  content.replaceChildren(el("div", { class: "loading", text: "Checking the flock…" }));
+  try {
+    const [data, alerts, me] = await Promise.all([api("/api/shepherd"), api("/api/alerts").catch(() => null), viewer()]);
+    data.alertsInfo = alerts;
+    data.me = me;
+    sidebarCounts = data.counts || { findings: data.findings.length };
+    mount();
+    render(data);
+  } catch (err) {
+    mount();
+    clear(content);
+    content.append(errorBanner(err.message));
+  }
+}
+
+function duration(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "—";
+  const sec = ms / 1000;
+  if (sec < 1) return `${Math.round(ms)} ms`;
+  if (sec < 60) return `${sec.toFixed(1)} s`;
+  const min = sec / 60;
+  if (min < 60) return `${Math.round(min)} min`;
+  return `${(min / 60).toFixed(1)} h`;
+}
+
+function section(title, children) {
+  return el("div", { class: "section" }, [el("h2", { class: "section-title", text: title }), ...[].concat(children)]);
+}
+
+function wfLink(id, name) {
+  return id ? `/?id=${encodeURIComponent(id)}` : null;
+}
+
+function findingRow({ href, title, sub, tone = "stop", chip }) {
+  const tag = href ? "a" : "div";
+  return el(tag, { class: "row", href }, [
+    el("span", { class: `wf-dot`, style: { background: tone === "stop" ? "var(--stop-ink)" : tone === "warn" ? "#D97706" : "var(--line-3)" } }),
+    el("div", { style: { minWidth: "0" } }, [
+      el("div", { class: "row-title", text: title }),
+      sub ? el("div", { class: "row-sub", title: sub, text: sub }) : null
+    ]),
+    chip ? el("span", { class: tone === "stop" ? "chip chip-stop" : "chip chip-warn", text: chip }) : el("span")
+  ]);
+}
+
+function render(data) {
+  clear(content);
+
+  const passing = data.guardrails.filter((g) => g.status === "pass").length;
+  const i = data.insights || {};
+  content.append(el("div", { class: "stats" }, [
+    statCard("Guardrails passing", `${passing} / ${data.guardrails.length}`),
+    statCard(`Waiting on ${ORG.adminName}`, data.approvals.length),
+    statCard("Secrets in nodes", data.findings.length),
+    statCard("Runs", i.total ? i.total.value.toLocaleString() : "—"),
+    statCard("Failure rate", i.failureRate ? `${(i.failureRate.value * 100).toFixed(1)}%` : "—", i.failed ? `${i.failed.value.toLocaleString()} failed` : null),
+    statCard("Typical run", data.runTime ? duration(data.runTime.medianMs) : "—",
+      data.runTime ? `90% under ${duration(data.runTime.p90Ms)} · last ${data.runTime.count} runs` : null)
+  ]));
+
+  content.append(section("Guardrails · every workflow, always on", el("div", { class: "guardrails" },
+    data.guardrails.map((g) =>
+      el("div", { class: "card guardrail" }, [
+        el("div", { class: "guardrail-head" }, [
+          el("div", { class: "guardrail-title", text: g.title }),
+          statusChip(g.status, g.count, g.evidence)
+        ]),
+        el("div", { class: "guardrail-detail", text: g.detail }),
+        g.evidence && g.evidence.length
+          ? el("div", { class: "guardrail-evidence" }, g.evidence.map((line) => el("div", { text: line })))
+          : null
+      ])
+    )
+  )));
+
+  const w = data.alertsInfo;
+  if (w) {
+    const head = el("div", { class: "section-title" }, [
+      el("span", { text: `Watcher · ${w.enabled ? `every ${w.intervalMinutes} min` : "off"}` }),
+      el("span", { style: { fontWeight: "400", textTransform: "none", letterSpacing: "0" }, text:
+        w.lastRun ? `· last check ${relativeTime(w.lastRun)} · ${w.slack ? "posts to Slack" : "in-app only"}` : "· not run yet" })
+    ]);
+    if (data.me && data.me.isAdmin && w.enabled) {
+      head.append(el("button", { class: "btn btn-sm", type: "button", style: { marginLeft: "auto", textTransform: "none", letterSpacing: "0" }, text: "Check now",
+        onclick: async (e) => { e.target.disabled = true; try { await api("/api/watch/run", { method: "POST", body: "{}" }); await load(); } catch (err) { e.target.disabled = false; alert(err.message); } } }));
+    }
+    const body = w.alerts.length
+      ? el("div", { class: "card rows" }, w.alerts.map((a) => findingRow({
+          href: a.workflow_id && !a.workflow_id.includes(" ") ? `/?id=${encodeURIComponent(a.workflow_id)}` : null,
+          title: a.title, sub: `${a.detail || ""} · first seen ${relativeTime(a.first_seen)}`,
+          tone: a.kind === "secret" || a.kind === "loop" ? "stop" : "warn", chip: a.kind })))
+      : el("div", { class: "card empty", text: w.enabled ? "Nothing open. The watcher raises secrets and loops here (failures already go to the n8n error handler)." : "The watcher is off." });
+    const sec = el("div", { class: "section" }, [head, body]);
+    if (w.lastError) sec.append(el("div", { class: "small", style: { color: "var(--stop-ink)", marginTop: "6px" }, text: `Last error: ${w.lastError}` }));
+    content.append(sec);
+  }
+
+  // What needs doing, in one list.
+  const todo = [];
+  for (const f of data.findings) {
+    todo.push(findingRow({ href: wfLink(f.workflowId), title: `${f.workflowName} · ${f.node}`, sub: `${f.secret}: ${f.preview}. ${f.fix}`, chip: "secret" }));
+  }
+  for (const f of data.loopFindings) {
+    todo.push(findingRow({ href: wfLink(f.workflowId), title: f.workflowName, sub: f.detail, chip: "loop" }));
+  }
+  for (const f of data.failures) {
+    todo.push(findingRow({ href: wfLink(f.workflowId), title: f.workflowName, sub: f.detail, tone: "warn", chip: "failing" }));
+  }
+  content.append(section(`Needs attention · ${todo.length}`,
+    todo.length ? el("div", { class: "card rows" }, todo) : el("div", { class: "card empty", text: "Nothing needs attention." })));
+
+  content.append(section(`Waiting on ${ORG.adminName} · ${data.approvals.length}`,
+    data.approvals.length ? data.approvals.map(approvalCard) : el("div", { class: "card empty", text: "Nothing is waiting." })));
+
+  if (data.nodePolicy) {
+    const p = data.nodePolicy;
+    content.append(section("Node type policy (enforced by n8n)", el("div", { class: "card", style: { padding: "14px" } }, [
+      el("div", { class: "small", text: `Default action: ${p.defaultAction} · ${p.ruleCount} rule${p.ruleCount === 1 ? "" : "s"} · version ${p.version}` }),
+      el("div", { class: "small", style: { marginTop: "6px" }, text: p.denied.length ? `Denied: ${p.denied.join(", ")}` : "No write node types are denied." }),
+      p.allowed.length ? el("div", { class: "small", style: { marginTop: "6px", color: "var(--warn-ink)" }, text: `Still allowed: ${p.allowed.join(", ")}` }) : null
+    ])));
+  }
+
+  if (data.auditFindings && data.auditFindings.length) {
+    content.append(section(`n8n's own security audit · ${data.auditFindings.length}`, el("div", { class: "card rows" },
+      data.auditFindings.map((f) =>
+        el("details", { class: "row", style: { display: "block" } }, [
+          el("summary", { class: "row-title", style: { cursor: "pointer", whiteSpace: "normal" }, text: f.title }),
+          el("div", { class: "small", style: { marginTop: "6px", color: "var(--ink-2)" }, text: f.description }),
+          f.recommendation ? el("div", { class: "small muted", style: { marginTop: "4px" }, text: f.recommendation }) : null
+        ])
+      )
+    )));
+  }
+
+  const log = data.audit.length
+    ? el("div", { class: "card rows" }, data.audit.map((row) =>
+        el("div", { class: "row", style: { gridTemplateColumns: "90px minmax(0,1fr) auto" } }, [
+          el("span", { class: "audit-at", text: relativeTime(row.at) }),
+          el("div", { style: { minWidth: "0" } }, [
+            el("div", { class: "row-title", text: `${row.action} · ${row.target || ""}` }),
+            row.detail ? el("div", { class: "row-sub", text: row.detail }) : null
+          ]),
+          el("span", { class: "row-sub", text: row.actor || "" })
+        ])))
+    : el("div", { class: "card empty", text: "No decisions recorded yet." });
+  content.append(section("Audit log", log));
+}
+
+// The chip must not say "not licensed" when the real problem is a missing API
+// key scope: those have different fixes.
+function statusChip(status, count, evidence) {
+  if (status === "pass") return el("span", { class: "chip chip-ok", text: "pass" });
+  if (status === "warn") return el("span", { class: "chip chip-warn", text: `${count} to look at` });
+  if (status === "fail") return el("span", { class: "chip chip-stop", text: `${count} found` });
+  const text = (evidence || []).join(" ");
+  if (/needs the .* scope/.test(text)) return el("span", { class: "chip chip-warn", text: "needs key scope" });
+  if (/licence/.test(text)) return el("span", { class: "chip chip-muted", text: "not licensed" });
+  return el("span", { class: "chip chip-muted", text: "not checked" });
+}
+
+function statCard(label, value, note) {
+  return el("div", { class: "card stat" }, [
+    el("div", { class: "stat-label", text: label }),
+    el("div", { class: "stat-value", text: String(value ?? "—") }),
+    note ? el("div", { class: "stat-note", text: note }) : null
+  ]);
+}
+
+function approvalCard(approval) {
+  const card = el("div", { class: "card approval" }, [
+    el("div", { class: "approval-head" }, [
+      el("div", { class: "avatar", style: { background: "#B45309" }, text: initials(approval.requested_by) }),
+      el("div", {}, [
+        el("div", { class: "approval-name", text: approval.workflow_name }),
+        el("div", { class: "small muted", text: approval.reason })
+      ])
+    ]),
+    el("div", { class: "approval-actions" }, [
+      el("button", { class: "btn btn-primary btn-sm", type: "button", text: "Approve" }),
+      el("button", { class: "btn btn-sm", type: "button", text: "Deny" })
+    ])
+  ]);
+
+  const [approve, deny] = card.querySelectorAll("button");
+  const decide = async (decision) => {
+    approve.disabled = true;
+    deny.disabled = true;
+    try {
+      await api("/api/approvals/decide", {
+        method: "POST",
+        body: JSON.stringify({ id: approval.id, decision })
+      });
+      load();
+    } catch (err) {
+      card.append(errorBanner(err.message));
+      approve.disabled = false;
+      deny.disabled = false;
+    }
+  };
+  approve.addEventListener("click", () => decide("approved"));
+  deny.addEventListener("click", () => decide("denied"));
+  return card;
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

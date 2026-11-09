@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flock — organize</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Organize</h1>
+        <p>Tag, move and switch workflows in bulk. Nothing changes until you confirm the plan.</p>
+      </div>
+    </header>
+    <div class="content" id="content">
+      <div class="loading">Loading workflows…</div>
+    </div>
+  </main>
+</div>
+<script type="module">
+import { api, el, clear, renderSidebar, errorBanner, logo, systemStrip, orgInfo } from "/lib/ui.js";
+const ORG = await orgInfo();
+import { logoForSystem, systemLabel } from "/lib/logos.js";
+
+const shell = document.getElementById("shell");
+const content = document.getElementById("content");
+
+let options = null;
+let selected = new Set();
+let op = "add-tags";
+let chosenTags = new Set();
+let chosenFolder = "";
+let plan = null;
+let search = "";
+
+function mount() {
+  const existing = shell.querySelector(".sidebar");
+  const counts = { company: options ? options.workflows.length : undefined };
+  if (existing) existing.replaceWith(renderSidebar("organize", counts));
+  else shell.prepend(renderSidebar("organize", counts));
+}
+
+async function load() {
+  try {
+    options = await api("/api/bulk/options");
+    mount();
+    render();
+  } catch (err) {
+    mount();
+    clear(content);
+    content.append(errorBanner(err.message));
+  }
+}
+
+function render() {
+  clear(content);
+  plan = null;
+
+  const layout = el("div", { class: "organize-layout" });
+
+  // ── Left: selection ──
+  const listPanel = el("div", { class: "card organize-panel" });
+  const searchBox = el("input", {
+    type: "search",
+    placeholder: "Filter workflows…",
+    value: search,
+    class: "organize-search"
+  });
+  searchBox.addEventListener("input", () => {
+    search = searchBox.value;
+    renderList(listBody);
+  });
+
+  const listBody = el("div", { class: "organize-list" });
+  listPanel.append(
+    el("div", { class: "organize-head" }, [
+      el("div", { class: "map-panel-title", style: { margin: "0" }, text: "Workflows" }),
+      el("div", { style: { display: "flex", gap: "6px" } }, [
+        el("button", { class: "btn btn-sm", type: "button", text: "All", onclick: () => { selected = new Set(visible().filter((w) => options.isAdmin || !w.infra).map((w) => w.id)); render(); } }),
+        el("button", { class: "btn btn-sm", type: "button", text: "None", onclick: () => { selected.clear(); render(); } })
+      ])
+    ]),
+    searchBox,
+    listBody
+  );
+  renderList(listBody);
+
+  // ── Right: operation ──
+  const opPanel = el("div", { class: "card organize-panel" });
+  opPanel.append(el("div", { class: "map-panel-title", text: "Operation" }));
+
+  for (const o of options.operations) {
+    const id = `op-${o.key}`;
+    const radio = el("input", { type: "radio", name: "op", id, checked: o.key === op });
+    radio.addEventListener("change", () => {
+      op = o.key;
+      chosenTags.clear();
+      chosenFolder = "";
+      render();
+    });
+    opPanel.append(
+      el("label", { class: "op-row", for: id }, [
+        radio,
+        el("div", {}, [
+          el("div", { style: { fontWeight: "600", fontSize: "13.5px" }, text: o.label }),
+          el("div", { class: "small muted", text: o.detail })
+        ])
+      ])
+    );
+  }
+
+  const def = options.operations.find((o) => o.key === op);
+
+  if (def.needs === "tags") {
+    opPanel.append(el("div", { class: "map-panel-title", style: { marginTop: "14px" }, text: "Tags" }));
+    const tagChip = (t) => {
+      const on = chosenTags.has(t.name);
+      const isSys = t.name.startsWith("sys:");
+      const chip = el("button", { type: "button", class: `tag-chip${on ? " tag-chip-on" : ""}`, title: t.name }, [
+        isSys ? logo({ src: logoForSystem(t.name), label: systemLabel(t.name) }, "sm") : null,
+        el("span", { text: isSys ? systemLabel(t.name) : t.name })
+      ]);
+      chip.addEventListener("click", () => {
+        on ? chosenTags.delete(t.name) : chosenTags.add(t.name);
+        render();
+      });
+      return chip;
+    };
+    const sysTags = options.tags.filter((t) => t.name.startsWith("sys:"));
+    const otherTags = options.tags.filter((t) => !t.name.startsWith("sys:"));
+    if (sysTags.length) {
+      opPanel.append(el("div", { class: "small muted", style: { margin: "4px 0 6px" }, text: "Systems" }));
+      opPanel.append(el("div", { class: "tag-picker" }, sysTags.map(tagChip)));
+    }
+    opPanel.append(el("div", { class: "small muted", style: { margin: "10px 0 6px" }, text: "Other tags" }));
+    opPanel.append(el("div", { class: "tag-picker" }, otherTags.map(tagChip)));
+  }
+
+  if (def.needs === "folderId") {
+    opPanel.append(el("div", { class: "map-panel-title", style: { marginTop: "14px" }, text: "Destination folder" }));
+    const sel = el("select", { class: "organize-select" });
+    sel.append(el("option", { value: "", text: "Choose a folder…" }));
+    for (const f of options.folders) {
+      sel.append(el("option", { value: f.id, text: f.name, selected: f.id === chosenFolder }));
+    }
+    sel.addEventListener("change", () => {
+      chosenFolder = sel.value;
+      render();
+    });
+    opPanel.append(sel);
+  }
+
+  const summary = el("div", { class: "organize-summary" });
+  summary.append(
+    el("div", { class: "small", text: `${selected.size} workflow${selected.size === 1 ? "" : "s"} selected` })
+  );
+
+  const planBtn = el("button", { class: "btn btn-primary", type: "button", text: "Preview plan", style: { width: "100%", marginTop: "10px" } });
+  planBtn.disabled = selected.size === 0;
+  planBtn.addEventListener("click", () => previewPlan(planOut));
+  opPanel.append(summary, planBtn);
+
+  const planOut = el("div", { class: "organize-plan" });
+  opPanel.append(planOut);
+
+  layout.append(listPanel, opPanel);
+  content.append(layout);
+}
+
+function visible() {
+  const q = search.trim().toLowerCase();
+  return options.workflows.filter((w) => {
+    if (!q) return true;
+    return w.name.toLowerCase().includes(q) || w.tags.some((t) => t.toLowerCase().includes(q)) || (w.systems || []).some((x) => x.label.toLowerCase().includes(q));
+  });
+}
+
+function renderList(container) {
+  clear(container);
+  const rows = visible();
+  if (rows.length === 0) {
+    container.append(el("div", { class: "empty", text: "No workflows match." }));
+    return;
+  }
+  for (const w of rows) {
+    // Infrastructure is visible to everyone but only an admin can select it.
+    const locked = w.infra && !options.isAdmin;
+    const box = el("input", { type: "checkbox", checked: selected.has(w.id), disabled: locked, title: locked ? `Infrastructure — only ${ORG.adminName} can change this` : null });
+    box.addEventListener("change", () => {
+      box.checked ? selected.add(w.id) : selected.delete(w.id);
+      render();
+    });
+    const otherTags = w.tags.filter((t) => !t.startsWith("sys:") && !t.startsWith("trigger:"));
+    container.append(
+      el("label", { class: "organize-row", "data-locked": locked ? "true" : null }, [
+        box,
+        el("div", { style: { minWidth: "0" } }, [
+          el("div", { class: "organize-name", text: w.name }),
+          el("div", { class: "organize-meta" }, [
+            systemStrip(w.systems || [], { max: 6 }),
+            otherTags.length ? el("span", { class: "tag-mini", text: otherTags.join(" · ") }) : null
+          ])
+        ]),
+        w.infra
+          ? el("span", { class: "wf-lock", title: `Infrastructure: ${(w.infraReasons || []).join("; ")}`, text: "🔒" })
+          : el("span"),
+        w.active ? el("span", { class: "chip chip-ok", text: "on" }) : el("span", { class: "chip chip-muted", text: "off" })
+      ])
+    );
+  }
+}
+
+async function previewPlan(out) {
+  clear(out);
+  out.append(el("div", { class: "small muted", text: "Planning…" }));
+  try {
+    const body = {
+      op,
+      workflowIds: [...selected],
+      tags: [...chosenTags],
+      folderId: chosenFolder || undefined
+    };
+    const res = await api("/api/bulk/plan", { method: "POST", body: JSON.stringify(body) });
+    plan = body;
+    clear(out);
+
+    out.append(
+      el("div", { class: "plan-box" }, [
+        el("div", { style: { fontWeight: "600", marginBottom: "6px" }, text: `${res.plan.label} · ${res.plan.count} workflow${res.plan.count === 1 ? "" : "s"}` }),
+        res.plan.tags ? el("div", { class: "small", text: `Tags: ${res.plan.tags.map((t) => t.name).join(", ")}` }) : null,
+        res.plan.folder ? el("div", { class: "small", text: `Into: ${res.plan.folder.name}` }) : null,
+        el("div", { class: "plan-list" },
+          res.preview.slice(0, 40).map((p) =>
+            el("div", { class: "small muted", text: `· ${p.name}` })
+          )
+        ),
+        res.preview.length > 40
+          ? el("div", { class: "small muted", text: `…and ${res.preview.length - 40} more` })
+          : null
+      ])
+    );
+
+    const applyBtn = el("button", { class: "btn btn-primary", type: "button", text: `Apply to ${res.plan.count}`, style: { width: "100%", marginTop: "10px" } });
+    applyBtn.addEventListener("click", async () => {
+      applyBtn.disabled = true;
+      applyBtn.textContent = "Applying…";
+      try {
+        const result = await api("/api/bulk/apply", { method: "POST", body: JSON.stringify(plan) });
+        clear(out);
+        out.append(
+          el("div", { class: "plan-box" }, [
+            el("div", { style: { fontWeight: "600" }, text: `${result.label} — done` }),
+            el("div", { class: "small", text: `${result.applied} applied · ${result.unchanged} unchanged · ${result.failed} failed` }),
+            ...result.results.filter((r) => r.status === "failed").slice(0, 10).map((r) =>
+              el("div", { class: "small", style: { color: "var(--stop-ink)" }, text: `· ${r.id}: ${r.error}` })
+            )
+          ])
+        );
+        selected.clear();
+        await load();
+      } catch (err) {
+        out.append(errorBanner(err.message));
+        applyBtn.disabled = false;
+        applyBtn.textContent = "Retry";
+      }
+    });
+    out.append(applyBtn);
+  } catch (err) {
+    clear(out);
+    out.append(errorBanner(err.message));
+  }
+}
+
+load();
+</script>
+</body>
+</html>

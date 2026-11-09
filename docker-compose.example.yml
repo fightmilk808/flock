@@ -1,0 +1,20 @@
+# Flock next to an existing n8n. Copy to docker-compose.yml and .env.example to
+# .env, fill in .env, then: docker compose up -d --build
+services:
+  flock:
+    build: .
+    container_name: flock
+    env_file: .env
+    environment:
+      # Reach n8n over the compose network; links in the UI use FLOCK_N8N_UI_URL.
+      FLOCK_N8N_URL: ${FLOCK_N8N_URL:-http://n8n:5678}
+    volumes:
+      - flock_data:/data # approvals, alerts and the audit log (SQLite)
+    ports:
+      # Loopback only. Put a sign-in proxy (e.g. Cloudflare Access) in front
+      # before exposing it: without one, every visitor is the admin.
+      - 127.0.0.1:4174:4174
+    restart: unless-stopped
+
+volumes:
+  flock_data:
