@@ -1,0 +1,75 @@
+# Rebuilds this repo's GitHub wiki from README.md and docs/ on every docs change.
+# The wiki is generated: edit the repo, not the wiki.
+name: wiki-sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "*.md"
+      - "docs/**"
+      - ".github/scripts/build-wiki.mjs"
+      - ".github/workflows/wiki-sync.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Every trigger (push, release, manual run from any branch) publishes the default branch.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Build the wiki tree
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node .github/scripts/build-wiki.mjs
+      - name: Publish to the wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          short="$(git rev-parse --short=7 HEAD)"
+          subject="$(printf '%s' "${COMMIT_SUBJECT:-manual run}" | sed -n 1p)"
+          work="$(mktemp -d)"
+          if ! err="$(git clone --quiet "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" "$work/wiki" 2>&1)"; then
+            err="${err//${GITHUB_TOKEN}/***}"
+            if printf '%s' "$err" | grep -qi "not found"; then
+              # A copy of this repo without a wiki (a fork, a private twin) skips quietly.
+              echo "::warning::Wiki is not initialised, so there is nothing to publish to. Open the Wiki tab and create the first page."
+              exit 0
+            else
+              echo "::error::Wiki clone failed: ${err}"
+            fi
+            exit 1
+          fi
+          # Never overwrite a wiki someone wrote by hand: only one this action made, or a fresh placeholder.
+          if [ ! -f "$work/wiki/.wiki-sync" ]; then
+            pages="$(cd "$work/wiki" && ls -A | grep -v '^\.git$' || true)"
+            # A placeholder is GitHub's own first page ("Welcome to the <name> wiki!") or one marked "wiki-sync placeholder".
+            if [ -n "$pages" ] && ! { [ "$pages" = "Home.md" ] && grep -qiE "wiki-sync placeholder|^Welcome to the .+ wiki!?$" "$work/wiki/Home.md"; }; then
+              echo "::error::This wiki has pages the action did not write. Move them into docs/ or delete them, then run again."
+              exit 1
+            fi
+          fi
+          rsync -a --delete --exclude .git dist/wiki/ "$work/wiki/"
+          cd "$work/wiki"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "wiki-sync: ${short} ${subject}"
+          git push --quiet origin HEAD
