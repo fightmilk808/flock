@@ -7,3 +7,4 @@ flock.config.json
 .claude/*
 !.claude/settings.json
 !.claude/skills/
+dist/
